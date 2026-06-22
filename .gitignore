@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.DS_Store
+
+# Ignore uploaded documents except sample policies
+documents/*
+!documents/expense_policy.md
+!documents/remote_work_policy.md
