@@ -1,9 +1,12 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api import routes_documents, routes_health, routes_query
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(
     title="RAG Application",

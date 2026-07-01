@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 
 from app.core.embeddings.base import Embedder
@@ -5,6 +6,8 @@ from app.core.llm.base import LLM
 from app.core.reranker.base import Reranker
 from app.core.vector_store.base import VectorStore
 from app.models import AnswerResult, SourceCitation
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant that answers questions using ONLY the "
@@ -51,7 +54,17 @@ class RAGPipeline:
     def _retrieve(self, question: str):
         query_embedding = self.embedder.embed_query(question)
         candidates = self.vector_store.search(query_embedding, top_k=self.top_k)
-        return self.reranker.rerank(question, candidates, top_n=self.top_n)
+        reranked = self.reranker.rerank(question, candidates, top_n=self.top_n)
+        for i, chunk in enumerate(reranked):
+            logger.info(
+                "RAG chunk %d — file=%s idx=%d score=%.4f | %s",
+                i,
+                chunk.metadata.get("filename", "?"),
+                chunk.chunk_index,
+                chunk.score,
+                chunk.content[:200].replace("\n", " "),
+            )
+        return reranked
 
     def answer(self, question: str) -> AnswerResult:
         reranked = self._retrieve(question)
