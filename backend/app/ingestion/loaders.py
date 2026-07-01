@@ -3,13 +3,19 @@ from pathlib import Path
 import pytesseract
 from docx import Document as DocxDocument
 from pdf2image import convert_from_path
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 from pypdf import PdfReader
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 
 # Minimum characters from pypdf before assuming the PDF is a scanned image
 _OCR_FALLBACK_THRESHOLD = 100
+
+# 300 DPI is the minimum recommended for reliable OCR on printed text
+_OCR_DPI = 300
+
+# Tesseract config: LSTM engine, auto page segmentation
+_TESS_CONFIG = "--oem 3 --psm 1"
 
 
 def load_text(path: Path) -> str:
@@ -28,6 +34,14 @@ def load_text(path: Path) -> str:
     raise ValueError(f"Unsupported file type: {suffix}")
 
 
+def _preprocess_for_ocr(image: Image.Image) -> Image.Image:
+    """Grayscale → contrast boost → sharpen for better OCR on low-quality scans."""
+    image = image.convert("L")
+    image = ImageEnhance.Contrast(image).enhance(2.0)
+    image = image.filter(ImageFilter.SHARPEN)
+    return image
+
+
 def _load_pdf(path: Path) -> str:
     reader = PdfReader(str(path))
     pages_text = [page.extract_text() or "" for page in reader.pages]
@@ -36,9 +50,12 @@ def _load_pdf(path: Path) -> str:
     if len(text.strip()) >= _OCR_FALLBACK_THRESHOLD:
         return text
 
-    # Scanned PDF — convert pages to images and OCR each one
-    images = convert_from_path(str(path))
-    return "\n\n".join(pytesseract.image_to_string(img) for img in images)
+    # Scanned PDF — convert at high DPI, preprocess, then OCR each page
+    images = convert_from_path(str(path), dpi=_OCR_DPI)
+    return "\n\n".join(
+        pytesseract.image_to_string(_preprocess_for_ocr(img), config=_TESS_CONFIG)
+        for img in images
+    )
 
 
 def _load_docx(path: Path) -> str:
@@ -47,4 +64,5 @@ def _load_docx(path: Path) -> str:
 
 
 def _ocr_image(path: Path) -> str:
-    return pytesseract.image_to_string(Image.open(path))
+    image = Image.open(path)
+    return pytesseract.image_to_string(_preprocess_for_ocr(image), config=_TESS_CONFIG)
