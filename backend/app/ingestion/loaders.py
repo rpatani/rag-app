@@ -1,19 +1,24 @@
+import logging
+import warnings
 from pathlib import Path
 
 from docx import Document as DocxDocument
 from pdf2image import convert_from_path
-from PIL import Image
+from PIL import DecompressionBombWarning, Image
 from pypdf import PdfReader
 
 from app.core.ocr.factory import get_ocr_extractor
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 
 # Minimum characters from pypdf before assuming the PDF is a scanned image
 _OCR_FALLBACK_THRESHOLD = 100
 
-# 400 DPI for reliable OCR on printed text; 300 was too low for noisy scans
-_OCR_DPI = 400
+# 300 DPI — minimum recommended for printed text; higher values can produce
+# images that exceed safe memory limits on large or high-resolution scans.
+_OCR_DPI = 300
 
 
 def load_text(path: Path) -> str:
@@ -41,10 +46,22 @@ def _load_pdf(path: Path) -> str:
             f"[Page {i + 1}]\n{t}" for i, t in enumerate(pages_text) if t.strip()
         )
 
-    # Scanned PDF — convert at high DPI then OCR each page
+    # Scanned PDF — render each page as an image then OCR it.
+    # Suppress PIL's DecompressionBombWarning: TesseractOCR._preprocess()
+    # resizes oversized images before they are processed.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DecompressionBombWarning)
+        images = convert_from_path(str(path), dpi=_OCR_DPI)
+
     ocr = get_ocr_extractor()
-    images = convert_from_path(str(path), dpi=_OCR_DPI)
-    ocr_pages = [ocr.extract_text(img) for img in images]
+    ocr_pages: list[str] = []
+    for i, img in enumerate(images):
+        try:
+            ocr_pages.append(ocr.extract_text(img))
+        except Exception as exc:
+            logger.warning("OCR failed for page %d of %s: %s — skipping page", i + 1, path.name, exc)
+            ocr_pages.append("")
+
     return "\n\n".join(
         f"[Page {i + 1}]\n{t}" for i, t in enumerate(ocr_pages) if t.strip()
     )
@@ -56,4 +73,11 @@ def _load_docx(path: Path) -> str:
 
 
 def _ocr_image(path: Path) -> str:
-    return get_ocr_extractor().extract_text(Image.open(path))
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DecompressionBombWarning)
+            image = Image.open(path)
+        return get_ocr_extractor().extract_text(image)
+    except Exception as exc:
+        logger.warning("OCR failed for image %s: %s", path.name, exc)
+        return ""
