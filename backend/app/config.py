@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
 
+    # --- OCR ---
+    ocr_backend: str = "tesseract"            # "tesseract" | "aws_textract" | ...
+
     # --- Reranker ---
     reranker_backend: str = "cross_encoder"   # "cross_encoder" | "none"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
