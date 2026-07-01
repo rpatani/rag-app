@@ -48,13 +48,18 @@ def _load_pdf(path: Path) -> str:
     text = "\n\n".join(pages_text)
 
     if len(text.strip()) >= _OCR_FALLBACK_THRESHOLD:
-        return text
+        return "\n\n".join(
+            f"[Page {i + 1}]\n{t}" for i, t in enumerate(pages_text) if t.strip()
+        )
 
     # Scanned PDF — convert at high DPI, preprocess, then OCR each page
     images = convert_from_path(str(path), dpi=_OCR_DPI)
-    return "\n\n".join(
+    ocr_pages = [
         pytesseract.image_to_string(_preprocess_for_ocr(img), config=_TESS_CONFIG)
         for img in images
+    ]
+    return "\n\n".join(
+        f"[Page {i + 1}]\n{t}" for i, t in enumerate(ocr_pages) if t.strip()
     )
 
 
