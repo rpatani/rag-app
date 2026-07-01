@@ -4,7 +4,8 @@ from pathlib import Path
 
 from docx import Document as DocxDocument
 from pdf2image import convert_from_path
-from PIL import DecompressionBombWarning, Image
+from PIL import Image
+from PIL.Image import DecompressionBombWarning
 from pypdf import PdfReader
 
 from app.core.ocr.factory import get_ocr_extractor
