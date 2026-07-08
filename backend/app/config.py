@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # --- Security ---
+    # API key required on all /api routes (except /api/health).
+    # Empty = auth disabled (development only; never deploy without it).
+    app_api_key: str = ""
+
     # --- Database ---
     database_url: str = "postgresql+psycopg://user:password@localhost:5432/ragdb"
 
@@ -40,6 +45,15 @@ class Settings(BaseSettings):
 
     # --- Ingestion ---
     documents_dir: str = "/data/documents"
+
+    # --- Document source ---
+    # "local" = documents_dir on disk (default). "s3" = pull from an S3 bucket.
+    # AWS credentials are resolved by boto3's standard chain (env vars, shared
+    # credentials file, IAM role) — never stored in this app's config.
+    document_source_backend: str = "local"    # "local" | "s3"
+    s3_bucket: str = ""
+    s3_prefix: str = ""
+    s3_region: str = ""
 
 
 @lru_cache

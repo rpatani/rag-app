@@ -134,7 +134,10 @@ async function uploadFiles(files) {
 
       // clear the long-lived info toast and show outcome
       clearToasts("info");
-      if (result.status === "completed") {
+      if (result.status === "queued") {
+        showToast(`"${file.name}" uploaded — processing in background`, "success");
+        pollUntilSettled();
+      } else if (result.status === "completed") {
         showToast(`"${file.name}" ingested — ${result.chunk_count} chunks`, "success");
       } else {
         showToast(`"${file.name}" failed: ${result.error ?? result.status}`, "error");
@@ -145,6 +148,27 @@ async function uploadFiles(files) {
     }
     await refreshDocuments();
   }
+}
+
+// Refresh the document list every few seconds while any document is still
+// pending/processing, so status badges update without a manual reload.
+let pollTimer = null;
+async function pollUntilSettled() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const docs = await apiFetch("/api/documents");
+      await refreshDocuments();
+      const busy = docs.some((d) => d.status === "pending" || d.status === "processing");
+      if (!busy) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }, 3000);
 }
 
 function clearToasts(type) {
@@ -229,11 +253,19 @@ async function submitQuery(question) {
   const { row, bubble, cursor } = createAssistantRow();
 
   try {
-    const response = await fetch("/api/query/stream", {
+    let response = await fetch("/api/query/stream", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ question }),
     });
+
+    if (response.status === 401 && promptForApiKey()) {
+      response = await fetch("/api/query/stream", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ question }),
+      });
+    }
 
     if (!response.ok) throw new Error(`Server error ${response.status}`);
 
@@ -321,8 +353,33 @@ function escHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-async function apiFetch(url, options = {}) {
-  const res = await fetch(url, options);
+// ── Auth ──────────────────────────────────────────────────────────
+// The key lives in sessionStorage (cleared when the tab closes). The
+// server compares it timing-safely; an empty key means auth is disabled
+// server-side (development mode).
+function getApiKey() {
+  return sessionStorage.getItem("rag_api_key") || "";
+}
+
+function promptForApiKey() {
+  const key = window.prompt("This server requires an API key. Enter it to continue:");
+  if (key && key.trim()) {
+    sessionStorage.setItem("rag_api_key", key.trim());
+    return true;
+  }
+  return false;
+}
+
+function authHeaders(extra = {}) {
+  const key = getApiKey();
+  return key ? { ...extra, "X-API-Key": key } : extra;
+}
+
+async function apiFetch(url, options = {}, isRetry = false) {
+  const res = await fetch(url, { ...options, headers: authHeaders(options.headers || {}) });
+  if (res.status === 401 && !isRetry && promptForApiKey()) {
+    return apiFetch(url, options, true);
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { const j = await res.json(); msg = j.detail ?? msg; } catch {}

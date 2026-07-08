@@ -43,6 +43,44 @@ def query(request: QueryRequest, pipeline: RAGPipelineDep) -> QueryResponse:
     return QueryResponse(answer=result.answer, sources=[_to_response(s) for s in result.sources])
 
 
+# ── Retrieve-only endpoint (no LLM generation) ──────────────────────────────
+# Used by external agents (e.g. agent-core) that want grounded evidence chunks
+# to reason over themselves, rather than a finished answer. Reuses the same
+# retrieval+rerank path as /api/query, just without the generation step.
+class RetrieveRequest(BaseModel):
+    query: str
+    top_k: int | None = None
+
+
+class EvidenceChunk(BaseModel):
+    document_id: str
+    filename: str
+    chunk_index: int
+    content: str
+    score: float
+
+
+class RetrieveResponse(BaseModel):
+    chunks: list[EvidenceChunk]
+
+
+@router.post("/api/retrieve", response_model=RetrieveResponse)
+def retrieve(request: RetrieveRequest, pipeline: RAGPipelineDep) -> RetrieveResponse:
+    if request.top_k:
+        pipeline.top_k = request.top_k
+    reranked = pipeline._retrieve(request.query)
+    return RetrieveResponse(chunks=[
+        EvidenceChunk(
+            document_id=c.document_id,
+            filename=c.metadata.get("filename", "unknown"),
+            chunk_index=c.chunk_index,
+            content=c.content,
+            score=round(c.score, 4),
+        )
+        for c in reranked
+    ])
+
+
 @router.post("/api/query/stream")
 async def query_stream(request: QueryRequest, pipeline: RAGPipelineDep) -> StreamingResponse:
     """Stream tokens via Server-Sent Events as they arrive from the LLM."""

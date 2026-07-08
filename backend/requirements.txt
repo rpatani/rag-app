@@ -17,3 +17,6 @@ python-multipart==0.0.12
 pytesseract==0.3.13
 Pillow==10.4.0
 pdf2image==1.17.0
+
+boto3==1.35.24
+alembic==1.13.3

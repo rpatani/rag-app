@@ -8,3 +8,5 @@ __pycache__/
 documents/*
 !documents/expense_policy.md
 !documents/remote_work_policy.md
+.pytest_cache/
+backups/

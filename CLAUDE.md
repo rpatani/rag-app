@@ -30,17 +30,42 @@ DATABASE_URL=postgresql+psycopg://raguser:ragpassword@localhost:5432/ragdb \
   uvicorn app.main:app --reload --port 8000
 ```
 
-There are no tests yet. Smoke-test the key routes:
+## Testing
+
+```bash
+# Unit tests (no DB, no models — fakes injected via the interface pattern)
+cd backend && python -m pytest tests/ -q
+
+# End-to-end simulation: throwaway pgvector container + Alembic baseline +
+# full upload → async ingest → retrieve → delete cycle through the real API
+PYTHON=/path/to/venv/bin/python ./scripts/run_e2e.sh
+```
+
+Smoke-test the key routes (all /api routes except /api/health require the
+API key from APP_API_KEY in .env):
 
 ```bash
 curl http://localhost:8000/api/health
-curl -X POST http://localhost:8000/api/documents/ingest
-curl -X POST http://localhost:8000/api/query \
+curl -X POST -H "X-API-Key: $APP_API_KEY" http://localhost:8000/api/documents/ingest
+curl -X POST http://localhost:8000/api/query -H "X-API-Key: $APP_API_KEY" \
   -H "Content-Type: application/json" -d '{"question": "..."}'
 # Streaming variant (SSE):
-curl -X POST http://localhost:8000/api/query/stream \
+curl -X POST http://localhost:8000/api/query/stream -H "X-API-Key: $APP_API_KEY" \
   -H "Content-Type: application/json" -d '{"question": "..."}' --no-buffer
 ```
+
+## Operations
+
+- **Uploads are asynchronous**: POST /api/documents/upload returns 202 immediately;
+  ingestion runs on an in-process job queue (`app/core/jobs.py`). Poll GET /api/documents.
+- **Migrations**: Alembic (`backend/alembic/`). `alembic upgrade head` is idempotent
+  against a db bootstrapped by init.sql. New schema changes = new alembic revision.
+- **Backups**: `./scripts/backup.sh [dir]` (pg_dump + documents tar, 14-day retention);
+  restore with `./scripts/restore.sh`.
+- **Observability**: every request gets an X-Request-ID (logged and returned);
+  retrieval stages log timings; /api/health reports DB, disk, docs dir, queue depth.
+- **Document sources**: `DOCUMENT_SOURCE_BACKEND=local|s3` — the DocumentSource
+  interface (`app/core/document_source/`) is how portal/cloud connectors get added.
 
 ## Architecture
 

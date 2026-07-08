@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from app.core.embeddings.base import Embedder
 from app.core.llm.base import LLM
 from app.core.reranker.base import Reranker
+from app.core.observability import log_timing
 from app.core.vector_store.base import VectorStore
 from app.models import AnswerResult, SourceCitation
 
@@ -52,9 +53,12 @@ class RAGPipeline:
         self.top_n = top_n   # chunks kept after reranking
 
     def _retrieve(self, question: str):
-        query_embedding = self.embedder.embed_query(question)
-        candidates = self.vector_store.search(query_embedding, top_k=self.top_k)
-        reranked = self.reranker.rerank(question, candidates, top_n=self.top_n)
+        with log_timing("embed_query", logger):
+            query_embedding = self.embedder.embed_query(question)
+        with log_timing("vector_search", logger):
+            candidates = self.vector_store.search(query_embedding, top_k=self.top_k)
+        with log_timing("rerank", logger):
+            reranked = self.reranker.rerank(question, candidates, top_n=self.top_n)
         for i, chunk in enumerate(reranked):
             logger.info(
                 "RAG chunk %d — file=%s idx=%d score=%.4f | %s",

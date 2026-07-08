@@ -5,10 +5,11 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.dependencies import DbDep, EmbedderDep, SettingsDep, VectorStoreDep
+from app.core.jobs import get_job_queue
+from app.dependencies import DbDep, SettingsDep, VectorStoreDep
 from app.db.models import Document
 from app.ingestion.loaders import SUPPORTED_EXTENSIONS
-from app.ingestion.pipeline import _ingest_one, ingest_documents
+from app.ingestion.pipeline import ingest_all_job, ingest_path_job, mark_document_pending
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -29,6 +30,11 @@ class IngestResultResponse(BaseModel):
     error: str | None = None
 
 
+class IngestQueuedResponse(BaseModel):
+    status: str
+    pending_jobs: int
+
+
 @router.get("", response_model=list[DocumentResponse])
 def list_documents(db: DbDep) -> list[DocumentResponse]:
     documents = db.execute(select(Document).order_by(Document.filename)).scalars().all()
@@ -43,26 +49,19 @@ def list_documents(db: DbDep) -> list[DocumentResponse]:
     ]
 
 
-@router.post("/ingest", response_model=list[IngestResultResponse])
-def trigger_ingestion(
-    db: DbDep,
-    vector_store: VectorStoreDep,
-    embedder: EmbedderDep,
-    settings: SettingsDep,
-) -> list[IngestResultResponse]:
-    results = ingest_documents(db, vector_store, embedder, settings)
-    return [
-        IngestResultResponse(filename=r.filename, status=r.status, chunk_count=r.chunk_count, error=r.error)
-        for r in results
-    ]
+@router.post("/ingest", response_model=IngestQueuedResponse, status_code=202)
+def trigger_ingestion() -> IngestQueuedResponse:
+    """Queue a scan of the documents directory. Poll GET /api/documents for progress."""
+    queue = get_job_queue()
+    if not queue.submit("ingest_all", ingest_all_job):
+        raise HTTPException(status_code=503, detail="Ingestion queue is full; try again shortly.")
+    return IngestQueuedResponse(status="queued", pending_jobs=queue.pending_count)
 
 
-@router.post("/upload", response_model=IngestResultResponse)
+@router.post("/upload", response_model=IngestResultResponse, status_code=202)
 async def upload_document(
     file: UploadFile,
     db: DbDep,
-    vector_store: VectorStoreDep,
-    embedder: EmbedderDep,
     settings: SettingsDep,
 ) -> IngestResultResponse:
     suffix = Path(file.filename or "").suffix.lower()
@@ -90,13 +89,12 @@ async def upload_document(
 
     dest.write_bytes(content)
 
-    result = _ingest_one(db, vector_store, embedder, settings, dest)
-    return IngestResultResponse(
-        filename=result.filename,
-        status=result.status,
-        chunk_count=result.chunk_count,
-        error=result.error,
-    )
+    # Queue ingestion so large files (OCR, embedding) never block the request.
+    mark_document_pending(db, dest)
+    if not get_job_queue().submit(f"ingest:{safe_filename}", ingest_path_job, str(dest)):
+        raise HTTPException(status_code=503, detail="Ingestion queue is full; try again shortly.")
+
+    return IngestResultResponse(filename=safe_filename, status="queued", chunk_count=0)
 
 
 @router.delete("/{filename}", status_code=204)
